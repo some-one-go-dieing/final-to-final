@@ -202,7 +202,6 @@ with tab1:
         required_kline_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
         has_full_kline_data = all(col in data.columns for col in required_kline_cols)
 
-        # 🌟 終極斷層修復：動態找出所有非交易日
         actual_dates = data.index.strftime("%Y-%m-%d").tolist()
         dt_all = pd.date_range(start=data.index[0], end=data.index[-1], freq='D').strftime("%Y-%m-%d").tolist()
         dt_breaks = list(set(dt_all) - set(actual_dates))
@@ -315,25 +314,31 @@ with tab1:
                 fig_rsi.add_hline(y=70, line_dash="dash", line_color="gray", annotation_text="超買區 (70)", annotation_position="top left")
                 fig_rsi.add_hline(y=30, line_dash="dash", line_color="gray", annotation_text="超賣區 (30)", annotation_position="bottom left")
                 fig_rsi.update_layout(
-                    title=f"{meta['etf']} RSI 相強指標面板", 
+                    title=f"{meta['etf']} RSI 相對強弱指標面板", 
                     height=350, template="plotly_white", yaxis_range=[0, 100], hovermode="x unified",
                     xaxis=dict(rangebreaks=[dict(values=dt_breaks)])
                 )
                 st.plotly_chart(fig_rsi, use_container_width=True)
 
 # ------------------------------------------
-# 🧠 第二分頁：獨立的定期定額回測
+# 🧠 第二分頁：獨立的定期定額回測 (升級雙軌數據分流)
 # ------------------------------------------
 with tab2:
     with st.container(border=True):
         st.subheader("💵 定期定額投資試算 (獨立設定)")
-        t2_c1, t2_c2, t2_c3 = st.columns(3)
+        t2_c1, t2_c2, t2_c3, t2_c4 = st.columns([1.2, 1.2, 1.2, 1.4])
         with t2_c1:
             t2_target = st.text_input("輸入回測標的代碼：", "0050.TW", key="t2_target")
         with t2_c2:
             t2_amount = st.number_input("每月固定投入金額 (NT$)", min_value=1000, value=10000, step=1000, key="t2_amt")
         with t2_c3:
             t2_start_date = st.date_input("選擇回測起始日期", datetime.date(2020, 1, 1), key="t2_date")
+        with t2_c4:
+            # 🌟 核心增強：加入資料來源選擇，預設為具備股價還原功能的 Yahoo Finance
+            t2_source = st.radio("優先資料來源設定：", ("Yahoo Finance", "FinMind (僅限台股)"), horizontal=True, key="t2_source")
+            
+        if t2_source == "FinMind (僅限台股)":
+            st.caption("⚠️ 提示：FinMind 提供未經除權息調整之歷史原價。長期回測建議切換為 **Yahoo Finance**（具備自動還原股價功能），計算總報酬率與真實 ROI 才會精準。")
             
         t2_button = st.button("🚀 執行定期定額回測", use_container_width=True, key="t2_btn")
 
@@ -343,17 +348,33 @@ with tab2:
                 start_date_str = t2_start_date.strftime("%Y-%m-%d")
                 end_date_str = datetime.date.today().strftime("%Y-%m-%d")
                 
-                if t2_target.endswith(".TW") or t2_target.replace(".TW", "").isdigit():
+                actual_t2_source = t2_source
+                bt_data = pd.DataFrame()
+                
+                # 🌟 核心增強：根據使用者選取的來源進行智慧路由與備援
+                if t2_source == "Yahoo Finance":
+                    bt_data = yf.Ticker(t2_target).history(start=start_date_str, end=end_date_str, auto_adjust=True)
+                    if (bt_data.empty or len(bt_data) <= 1) and t2_target.endswith(".TW"):
+                        actual_t2_source = "FinMind (備援)"
+                        fm_id = t2_target.replace(".TW", "")
+                        bt_df = fm_api.taiwan_stock_daily(stock_id=fm_id, start_date=start_date_str, end_date=end_date_str)
+                        if not bt_df.empty:
+                            bt_df = bt_df.rename(columns={'date': 'Date', 'close': 'Close'})
+                            bt_df['Date'] = pd.to_datetime(bt_df['Date'])
+                            bt_data = bt_df.set_index('Date')
+                else:
                     fm_id = t2_target.replace(".TW", "")
                     bt_df = fm_api.taiwan_stock_daily(stock_id=fm_id, start_date=start_date_str, end_date=end_date_str)
                     if not bt_df.empty:
                         bt_df = bt_df.rename(columns={'date': 'Date', 'close': 'Close'})
                         bt_df['Date'] = pd.to_datetime(bt_df['Date'])
                         bt_data = bt_df.set_index('Date')
-                else:
-                    bt_data = yf.Ticker(t2_target).history(start=start_date_str, end=end_date_str, auto_adjust=True)
                 
                 if not bt_data.empty and len(bt_data) > 1:
+                    # 🌟 核心防呆：抹除時區資訊避免 to_period 時異常
+                    if bt_data.index.tz is not None:
+                        bt_data.index = bt_data.index.tz_localize(None)
+                        
                     bt_data['YearMonth'] = bt_data.index.to_period('M')
                     monthly_first_days = bt_data.groupby('YearMonth').first()
                     
@@ -362,7 +383,7 @@ with tab2:
                     total_shares = (t2_amount / monthly_first_days['Close']).sum()
                     final_value = total_shares * bt_data['Close'].iloc[-1]
                     
-                    st.success(f"✅ 回測完成！期間：{monthly_first_days.index[0]} 至 {monthly_first_days.index[-1]} (共 {total_months} 個月)")
+                    st.success(f"✅ 回測完成！ (數據來源: {actual_t2_source}) | 期間：{monthly_first_days.index[0]} 至 {monthly_first_days.index[-1]} (共 {total_months} 個月)")
                     res_c1, res_c2, res_c3 = st.columns(3)
                     with res_c1: st.metric("總投入成本", f"NT$ {total_cost:,.0f}")
                     with res_c2: st.metric("期末總價值", f"NT$ {final_value:,.0f}", f"{final_value - total_cost:+,.0f}")
