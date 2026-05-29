@@ -96,6 +96,9 @@ with tab1:
             try:
                 if data_source == "Yahoo Finance":
                     temp_data = yf.Ticker(etf_option).history(start=fetch_start_date, end=end_date, auto_adjust=True)
+                    # 👇 加上這行：無情刪除沒有收盤價的 NaN 幽靈數據
+                    temp_data = temp_data.dropna(subset=['Close']) 
+                    
                     if not temp_data.empty and len(temp_data) > 1:
                         hist_data = temp_data
                         fetch_success = True
@@ -354,6 +357,7 @@ with tab2:
                 # 🌟 核心增強：根據使用者選取的來源進行智慧路由與備援
                 if t2_source == "Yahoo Finance":
                     bt_data = yf.Ticker(t2_target).history(start=start_date_str, end=end_date_str, auto_adjust=True)
+                    bt_data = bt_data.dropna(subset=['Close']) 
                     if (bt_data.empty or len(bt_data) <= 1) and t2_target.endswith(".TW"):
                         actual_t2_source = "FinMind (備援)"
                         fm_id = t2_target.replace(".TW", "")
